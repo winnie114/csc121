@@ -1,0 +1,111 @@
+name: Module Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  test:
+    # only run for PRs from a branch named exactly module_<N>, e.g. module_0, module_3
+    if: startsWith(github.head_ref, 'module_')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Resolve module from branch name
+        id: module
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          if [[ ! "$BRANCH" =~ ^module_[0-9]+$ ]]; then
+            echo "Branch '$BRANCH' is not a valid module_<N> branch, skipping."
+            exit 1
+          fi
+          if [ ! -d "tests/$BRANCH" ]; then
+            echo "No tests found for '$BRANCH' (expected tests/$BRANCH)."
+            exit 1
+          fi
+          echo "name=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests for ${{ steps.module.outputs.name }}
+        id: run_tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pytest "tests/${{ steps.module.outputs.name }}" -v --junitxml=pytest_results.xml | tee pytest_output.txt
+
+      - name: Build test results table
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import os
+          import xml.etree.ElementTree as ET
+
+          lines = ["| Test | Result |", "| --- | --- |"]
+
+          if os.path.exists("pytest_results.xml"):
+              root = ET.parse("pytest_results.xml").getroot()
+              for tc in root.iter("testcase"):
+                  name = tc.get("name")
+                  classname = (tc.get("classname") or "").split(".")[-1]
+                  full_name = f"{classname}::{name}" if classname else name
+                  if tc.find("failure") is not None or tc.find("error") is not None:
+                      status = "❌"
+                  elif tc.find("skipped") is not None:
+                      status = "⏭️"
+                  else:
+                      status = "✅"
+                  lines.append(f"| `{full_name}` | {status} |")
+          else:
+              lines.append("| _(no results — collection error, see log below)_ | ❌ |")
+
+          with open("pytest_table.md", "w") as f:
+              f.write("\n".join(lines))
+          EOF
+
+      - name: Comment score on PR
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const moduleName = "${{ steps.module.outputs.name }}";
+            const output = fs.readFileSync('pytest_output.txt', 'utf8');
+            const trimmed = output.length > 60000 ? output.slice(-60000) : output;
+            const table = fs.readFileSync('pytest_table.md', 'utf8');
+            const passed = "${{ steps.run_tests.outcome }}" === "success";
+            const body = [
+              `### ${passed ? "✅" : "❌"} ${moduleName} test results`,
+              "",
+              table,
+              "",
+              "<details><summary>Full pytest output</summary>",
+              "",
+              "```",
+              trimmed.trim(),
+              "```",
+              "",
+              "</details>",
+            ].join("\n");
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail workflow if tests failed
+        if: steps.run_tests.outcome == 'failure'
+        run: exit 1
