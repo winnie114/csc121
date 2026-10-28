@@ -1,3 +1,5 @@
+import csv
+
 def dashboard():
     print("=" * 40)
     print("📚   YOUR LIBRARY")
@@ -6,6 +8,25 @@ def dashboard():
 def estimate_reading_time(pages):
     reading_time = pages / 40
     return round(reading_time,1)
+
+def format_book(book, number):
+    return f"{number}. '{book['title']}' - {book['author']} ({book['pages']} pages - approx. {book['hours']} hours to read)"
+
+def load_books(filename="books.csv"):
+    library = []
+    
+    with open(filename, "r", encoding="utf-8", newline="") as file:
+            reader = csv.DictReader(file)
+            for row in reader:
+                book = {
+                    "title": row["title"],
+                    "author": row["author"],
+                    "pages": int(row["pages"]),
+                    "hours": float(row["hours"])
+                }
+                library.append(book)
+    
+    return library
 
 def show_menu():
     print("\nWhat would you like to do?")
@@ -34,6 +55,12 @@ def add_book(library):
 
     library.append(book)
 
+    with open("books.csv", mode="a", encoding="utf-8", newline="") as file:
+        writer = csv.DictWriter(file, fieldnames=["title", "author", "pages", "hours"])
+        if file.tell() == 0:
+            writer.writeheader()
+        writer.writerow(book)
+
     print("\nBook added:\n")
     print(f"'{title}' - {author} ({pages} pages - approx. {hours} hours to read)")
 
@@ -42,13 +69,12 @@ def view_books(library):
         print("\nYour library is empty. Add a book first!")
     else:
         print("\nHere are your books:")
-
         for i in range(len(library)):
             book = library[i]
-            print(f"{i + 1}. '{book['title']}' - {book['author']} ({book['pages']} pages - approx. {book['hours']} hours to read)")
+            print(format_book(library[i], i + 1))
 
 def main():
-    library = []
+    library = load_books()
     dashboard()
 
     while True:
